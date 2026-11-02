@@ -22,7 +22,7 @@ defmodule Player.Worker do
 
   defp fetch(url) do
     options = [
-      finch: Player.Finch,
+      finch: [name: Player.Finch],
       retry: :transient,
       max_retries: 1,
       retry_delay: 200,
