@@ -1,0 +1,7 @@
+services:
+  player1:
+    environment:
+      MAX_IN_FLIGHT: "25"
+  player2:
+    environment:
+      MAX_IN_FLIGHT: "100"
