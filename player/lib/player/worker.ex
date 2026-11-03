@@ -1,23 +1,31 @@
 defmodule Player.Worker do
   @moduledoc """
-  One fetch. Downloads a page, extracts its article links
-  and sends them to the coordinator.
-  Failed fetch is reported as a dead end.
+  One fetch. Downloads a page, extracts its article links and sends them to
+  the coordinator with the outcome (`:ok` or `:error`). A failed fetch is a
+  dead end (no links), but it is always reported so `in_flight` goes back down.
   """
 
-  @doc "Started under the race's DynamicSupervisor. Plain linked process."
+  @doc "Started under the race's DynamicSupervisor as a plain linked process."
   def start_link(coordinator, canon, url, prefix) do
     {:ok, spawn_link(fn -> run(coordinator, canon, url, prefix) end)}
   end
 
   defp run(coordinator, canon, url, prefix) do
-    links =
-      case fetch(url) do
-        {:ok, body} -> Player.Links.extract(body, url, prefix)
-        :error -> []
+    {links, outcome} =
+      try do
+        case fetch(url) do
+          {:ok, body} ->
+            links = Player.Links.extract(body, url, prefix)
+            {links, :ok}
+
+          :error ->
+            {[], :error}
+        end
+      rescue
+        _ -> {[], :error}
       end
 
-    send(coordinator, {:expanded, canon, links})
+    send(coordinator, {:expanded, canon, links, outcome})
   end
 
   defp fetch(url) do

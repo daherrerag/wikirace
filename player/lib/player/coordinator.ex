@@ -1,19 +1,18 @@
 defmodule Player.Coordinator do
   @moduledoc """
-  Runs one race: owns the frontier, claims pages and publishes status.
+  Owns one race: frontier, claims and status. It never fetches or parses, it
+  only reacts to `{:expanded, canon, links, outcome}` messages, so it stays light.
 
-  Parallel BFS. Fetching and parsing happen in workers.
-  Coordinator only reacts to their results.
-  Each page is claimed once with `:ets.insert_new/2` and keeps its parent,
-  so every reported path is a chain
-  of links that were actually seen.
+  Parallel BFS: up to `MAX_IN_FLIGHT` (env, default 100) fetch workers at a
+  time. Every page is claimed once with `:ets.insert_new/2`; the claim stores
+  its parent, so a path is always a chain of links seen in fetched pages.
   """
 
   use GenServer, restart: :temporary
 
   alias WikiRace.Status
 
-  @max_in_flight 100
+  @default_max_in_flight 100
 
   def start_link(args), do: GenServer.start_link(__MODULE__, args)
 
@@ -28,6 +27,7 @@ defmodule Player.Coordinator do
     state = %{
       table: table,
       workers: workers,
+      max: System.get_env("MAX_IN_FLIGHT", "#{@default_max_in_flight}") |> String.to_integer(),
       prefix: Player.Links.prefix(start_url),
       target_url: target_url,
       target_c: Player.Links.canonical(target_url),
@@ -35,6 +35,7 @@ defmodule Player.Coordinator do
       queued: 1,
       in_flight: 0,
       fetched: 0,
+      errors: 0,
       current: start_url,
       path: [],
       status: :running
@@ -48,8 +49,13 @@ defmodule Player.Coordinator do
   def handle_continue(:dispatch, state), do: {:noreply, state |> dispatch() |> publish()}
 
   @impl true
-  def handle_info({:expanded, canon, links}, state) do
-    state = %{state | in_flight: state.in_flight - 1, fetched: state.fetched + 1}
+  def handle_info({:expanded, canon, links, outcome}, state) do
+    state = %{
+      state
+      | in_flight: state.in_flight - 1,
+        fetched: state.fetched + 1,
+        errors: state.errors + if(outcome == :error, do: 1, else: 0)
+    }
 
     state =
       if state.status == :running, do: absorb(state, canon, links), else: state
@@ -78,7 +84,17 @@ defmodule Player.Coordinator do
   defp found(state, canon) do
     path = chain(state.table, canon, []) ++ [state.target_url]
     WikiRace.Harness.report(path)
+    stop_workers(state.workers)
     %{state | path: path, status: :found}
+  end
+
+  # The race is decided: stop loading Kiwix.
+  defp stop_workers(sup) do
+    for {_, pid, _, _} <- DynamicSupervisor.which_children(sup) do
+      DynamicSupervisor.terminate_child(sup, pid)
+    end
+
+    :ok
   end
 
   defp chain(table, canon, acc) do
@@ -86,7 +102,7 @@ defmodule Player.Coordinator do
     if parent == nil, do: [url | acc], else: chain(table, parent, [url | acc])
   end
 
-  defp dispatch(%{status: :running, in_flight: n} = state) when n < @max_in_flight do
+  defp dispatch(%{status: :running, in_flight: n, max: max} = state) when n < max do
     case :queue.out(state.frontier) do
       {{:value, {canon, url}}, rest} ->
         spec = %{
