@@ -10,7 +10,11 @@ defmodule Player.Crawler do
   @impl WikiRace.Crawler
   def start(start_url, target_url) do
     stop_previous_races()
-    DynamicSupervisor.start_child(Player.RaceSupervisor, {Player.Coordinator, {start_url, target_url}})
+
+    DynamicSupervisor.start_child(
+      Player.RaceSupervisor,
+      {Player.Coordinator, {start_url, target_url}}
+    )
   end
 
   @impl WikiRace.Crawler
