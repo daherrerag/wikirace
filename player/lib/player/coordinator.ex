@@ -10,6 +10,10 @@ defmodule Player.Coordinator do
 
   use GenServer, restart: :temporary
 
+  # begin:bench
+  require Logger
+  # end:bench
+
   alias WikiRace.Status
 
   @default_max_in_flight 100
@@ -38,7 +42,11 @@ defmodule Player.Coordinator do
       errors: 0,
       current: start_url,
       path: [],
-      status: :running
+      status: :running,
+      # begin:bench
+      started_ms: System.monotonic_time(:millisecond),
+      wall0: bench_start()
+      # end:bench
     }
 
     publish(state)
@@ -63,6 +71,16 @@ defmodule Player.Coordinator do
     {:noreply, state |> dispatch() |> publish()}
   end
 
+  # begin:bench
+  def handle_info(:bench_tick, %{status: :running} = state) do
+    log_bench("running", state)
+    Process.send_after(self(), :bench_tick, 1_000)
+    {:noreply, state}
+  end
+
+  def handle_info(:bench_tick, state), do: {:noreply, state}
+  # end:bench
+
   def handle_info(_other, state), do: {:noreply, state}
 
   # Claim new pages, or finish if the target is among the links.
@@ -85,7 +103,11 @@ defmodule Player.Coordinator do
     path = chain(state.table, canon, []) ++ [state.target_url]
     WikiRace.Harness.report(path)
     stop_workers(state.workers)
-    %{state | path: path, status: :found}
+    found = %{state | path: path, status: :found}
+    # begin:bench
+    log_bench("found", found)
+    # end:bench
+    found
   end
 
   # The race is decided: stop loading Kiwix.
@@ -148,4 +170,39 @@ defmodule Player.Coordinator do
     :ets.insert(:player_status, {self(), status})
     state
   end
+
+  # begin:bench
+  # Benchmark logging. Delete every `begin:bench` .. `end:bench` block to remove it.
+  # Grep the player logs for BENCH; `phase=found` lines are the per-race results.
+  defp bench_start do
+    :erlang.system_flag(:scheduler_wall_time, true)
+    Process.send_after(self(), :bench_tick, 1_000)
+    :erlang.statistics(:scheduler_wall_time_all)
+  end
+
+  defp log_bench(phase, state) do
+    ms = System.monotonic_time(:millisecond) - state.started_ms
+    hops = if state.path == [], do: 0, else: length(state.path)
+
+    Logger.info(
+      "BENCH phase=#{phase} ms=#{ms} hops=#{hops} fetched=#{state.fetched} " <>
+        "errors=#{state.errors} in_flight=#{state.in_flight} queued=#{state.queued} " <>
+        "max=#{state.max} util=#{utilization(state.wall0)} " <>
+        "current=#{state.current} target=#{state.target_url}"
+    )
+  end
+
+  defp utilization(wall0) do
+    wall1 = :erlang.statistics(:scheduler_wall_time_all)
+
+    {busy, total} =
+      Enum.zip(Enum.sort(wall0), Enum.sort(wall1))
+      |> Enum.reduce({0, 0}, fn {{_, a0, t0}, {_, a1, t1}}, {a, t} ->
+        {a + a1 - a0, t + t1 - t0}
+      end)
+
+    if total == 0, do: 0.0, else: Float.round(busy / total, 3)
+  end
+
+  # end:bench
 end

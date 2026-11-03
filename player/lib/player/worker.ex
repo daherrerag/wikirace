@@ -5,6 +5,10 @@ defmodule Player.Worker do
   dead end (no links), but it is always reported so `in_flight` goes back down.
   """
 
+  # begin:bench
+  require Logger
+  # end:bench
+
   @doc "Started under the race's DynamicSupervisor as a plain linked process."
   def start_link(coordinator, canon, url, prefix) do
     {:ok, spawn_link(fn -> run(coordinator, canon, url, prefix) end)}
@@ -13,9 +17,24 @@ defmodule Player.Worker do
   defp run(coordinator, canon, url, prefix) do
     {links, outcome} =
       try do
+        # begin:bench
+        t0 = System.monotonic_time(:millisecond)
+        # end:bench
+
         case fetch(url) do
           {:ok, body} ->
+            # begin:bench
+            t1 = System.monotonic_time(:millisecond)
+            # end:bench
             links = Player.Links.extract(body, url, prefix)
+            # begin:bench
+            t2 = System.monotonic_time(:millisecond)
+
+            Logger.info(
+              "FETCH fetch_ms=#{t1 - t0} parse_ms=#{t2 - t1} bytes=#{byte_size(body)}"
+            )
+
+            # end:bench
             {links, :ok}
 
           :error ->
