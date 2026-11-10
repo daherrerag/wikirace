@@ -1,20 +1,28 @@
 defmodule Player.Crawler do
   @moduledoc """
-  Your crawler.
-
-  The harness calls `start/2` and `status/1` of this module. Both raise until you
-  implement them. `WikiRace.Crawler` describes what each one must do.
+  Implementation of the WikiRace crawler contract.
   """
 
   @behaviour WikiRace.Crawler
 
   @impl WikiRace.Crawler
-  def start(_start_url, _target_url) do
-    raise "TODO: implement WikiRace.Crawler.start/2"
+  def start(start_url, target_url) do
+    race_id = System.unique_integer([:positive, :monotonic])
+
+    args = %{
+      race_id: race_id,
+      start_url: start_url,
+      target_url: target_url
+    }
+
+    DynamicSupervisor.start_child(
+      Player.CrawlerSupervisor,
+      {Player.Search.Coordinator, args}
+    )
   end
 
   @impl WikiRace.Crawler
-  def status(_pid) do
-    raise "TODO: implement WikiRace.Crawler.status/1"
+  def status(pid) do
+    Player.Search.Coordinator.status(pid)
   end
 end

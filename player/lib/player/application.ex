@@ -10,7 +10,12 @@ defmodule Player.Application do
 
   @impl true
   def start(_type, _args) do
-    children = []
+    children = [
+      {Player.TaskSupervisor, []},
+      {Player.CrawlerSupervisor, []},
+      {Finch, name: Player.Finch, pools: %{default: [size: 25, count: 8]}},
+      {Player.Infrastructure.Supervisor, []}
+    ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Player.Supervisor)
   end
